@@ -36,8 +36,10 @@ ifeq ($(homebrew_fftw),/)
 homebrew_fftw=
 endif
 
+homebrew_fftw='/cm/shared/apps/fftw/openmpi/gcc/64/3.3.8'
+
 ifeq ($(homebrew_fftw),)
-LIBS= -lm -L/usr/local/lib -lfftw3 -pthread
+LIBS= -lm -L/usr/local/lib -pthread
 LOC_INC= -I /usr/include -I /usr/global/include -I /usr/local/include
 else
 LIBS= -lm -L${homebrew_fftw}/lib -lfftw3 -pthread
@@ -52,7 +54,7 @@ SRC= src
 
 # default rules
 #
-all: sts
+all: mpi_sts
 
 # debug_make allows you to deterlime how HomeBrew (or lack) impacts compilation
 #
@@ -73,13 +75,17 @@ debug_make:
 legacy:
 	cd ${SRC}; $(MAKE) $@ ${PASSDOWN_VARS}
 
-sts: ${SRC}/sts
-	cd ${SRC}; $(MAKE) ../sts ${PASSDOWN_VARS}
+mpi_sts: ${SRC}/mpi_sts call_sts.o
+	cd ${SRC}; $(MAKE) ../mpi_sts ${PASSDOWN_VARS}
+
+call_sts.o:
+	# gcc -Wall -pedantic -Werror -O3 -c call_sts.c 
+	gcc -Wall -pedantic -O3 -c call_sts.c 
 
 sts_legacy_fft: ${SRC}/sts_legacy_fft
 	cd ${SRC}; $(MAKE) ../sts_legacy_fft ${PASSDOWN_VARS}
 
-${SRC}/sts:
+${SRC}/mpi_sts:
 	cd ${SRC}; $(MAKE) all ${PASSDOWN_VARS}
 
 ${SRC}/sts_legacy_fft:
@@ -89,6 +95,9 @@ ${SRC}/sts_legacy_fft:
 #
 clean:
 	cd ${SRC}; $(MAKE) $@ ${PASSDOWN_VARS}
+	rm -f mpi_sts
+	rm -f call_sts.o
+	rm -f src/mpi_sts
 
 clobber:
 	cd ${SRC}; $(MAKE) $@ ${PASSDOWN_VARS}

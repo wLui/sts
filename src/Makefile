@@ -124,7 +124,7 @@ TOOLS_SRC= ../tools/mkapertemplate.c ../tools/pi_term.nb ../tools/pi_term.txt \
 
 LEGACY_TARGETS= sts_legacy_fft ../sts_legacy_fft
 
-TARGETS= sts ../sts
+TARGETS= mpi_sts ../mpi_sts
 
 # default rule
 #
@@ -144,17 +144,18 @@ debug_make:
 
 legacy: ${LEGACY_TARGETS}
 
-sts: ${OBJ}
+mpi_sts: ${OBJ}
 	${RM} -f $@
-	${CC} ${CFLAGS} ${OBJ} ${LIBS} -o $@
+	# mpicc -Wall -Werror -pedantic ${CFLAGS} ${OBJ} ${LIBS} -o $@ -lrt
+	mpicc -Wall -pedantic ${CFLAGS} ${OBJ} ${LIBS} -o $@ -lrt -fPIE
 
 sts_legacy_fft: ${OBJ_LEGACY}
 	${RM} -f $@
 	${CC} ${CFLAGS} ${OBJ_LEGACY} ${LEGACY_LIBS} -o $@
 
-../sts: sts
+../mpi_sts: mpi_sts
 	${RM} -f $@
-	${CP} -f -p sts $@
+	${CP} -f -p mpi_sts $@
 
 ../sts_legacy_fft: sts_legacy_fft
 	${RM} -f $@
@@ -163,7 +164,8 @@ sts_legacy_fft: ${OBJ_LEGACY}
 # object dependencies and rules
 #
 sts.o: sts.c
-	${CC} -c -o $@ ${CFLAGS} sts.c
+	# mpicc -D_XOPEN_SOURCE=500 -Wall -Werror -pedantic -c -o $@ ${CFLAGS} sts.c
+	mpicc -D_XOPEN_SOURCE=500 -Wall -pedantic -c -o $@ ${CFLAGS} sts.c
 
 sts_legacy.o: sts.c
 	${CC} -c -o $@ ${CFLAGS} -DLEGACY_FFT sts.c

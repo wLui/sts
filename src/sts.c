@@ -297,7 +297,18 @@
 // NOTE: This code also does an exit(0) on normal completion
 // NOTE: 0-4 is used in parse_args.c
 
+#include <mpi.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+#define _GNU_SOURCE
+#include <dirent.h>
+#include <stdio.h>
 #include "utils/defs.h"
 #include "utils/utilities.h"
 #include "utils/externs.h"
@@ -305,7 +316,7 @@
 
 
 // STS version
-const char *const version = "3.2.7";
+const char *const version = "3.2.6";
 
 // Program name
 char *program = "sts";
@@ -313,22 +324,22 @@ char *program = "sts";
 // Do not debug by default
 long int debuglevel = DBG_NONE;
 
+extern int job_rank;
 
 int
-main(int argc, char *argv[])
+sts_main(int argc, char *argv[])
 {
 	struct state run_state;		// Options set and dynamic arrays for this run
 
 	/*
 	 * Set default test parameters and parse command line
 	 */
-	parse_args(&run_state, argc, argv);
 
+	parse_args(&run_state, argc, argv);
 	/*
 	 * Initialize all active tests
 	 */
 	init(&run_state);
-
 	/*
 	 * Report state if debugging
 	 */
@@ -379,21 +390,457 @@ main(int argc, char *argv[])
 	/*
 	 * Tell user that the execution is completed
 	 */
-	msg("Execution completed!");
+	//msg("Execution completed!");
 	if (run_state.runMode == MODE_ITERATE_AND_ASSESS || run_state.runMode == MODE_ASSESS_ONLY) {
 		if (run_state.legacy_output == true) {
 			msg("Check the finalAnalysisReport.txt file for the results");
 		} else {
-			msg("Check the result.txt file for the results");
+			//msg("Check the result.txt file for the results");
 		}
 	}
 
 	else if (run_state.runMode == MODE_ITERATE_ONLY) {
-		msg("A binary file (with extension .pvalues) containing the p-values of the tests has been generated.\n"
+		/*msg("A binary file (with extension .pvalues) containing the p-values of the tests has been generated.\n"
 				    "You can later assess the results of this and other runs by executing "
-				    "sts in '-m a' mode and passing that file's directory as an argument with the '-d' flag.");
+				    "sts in '-m a' mode and passing that file's directory as an argument with the '-d' flag.");*/
 	}
 
 	// All Done!!! -- Jessica Noll, Age 2
-	exit(0);
+	return 0;
+}
+
+uint64_t get_file_size(char* fname) {
+
+	struct stat statbuf;
+
+	// try to open the given file
+	int randfd = open(fname,O_RDONLY);
+
+	if (randfd == -1) {
+        	printf("Error opening file %s\n",fname);
+	        printf("Error: %s\n",strerror(errno));
+        	exit(1);
+	}
+
+
+	int ret_code = fstat(randfd,&statbuf);
+
+	if (ret_code == -1) {
+        	printf("Error stating file %s\n",fname);
+	        printf("Error: %s\n",strerror(errno));
+        	exit(1);                
+	}
+
+	close(randfd);
+
+	return statbuf.st_size;
+
+}
+
+uint64_t call_sts(uint64_t buffer_length,char* data_buffer, char** ret_buffer) {
+
+	// NOTE:
+	// buffer length is number of million bit runs, so multiply it by (1 << 17) to get the number of bytes
+	
+	int size,rank;
+	int name_len;
+	char processor_name[MPI_MAX_PROCESSOR_NAME];
+	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+	MPI_Comm_size(MPI_COMM_WORLD,&size);
+	MPI_Get_processor_name(processor_name, &name_len);
+
+	job_rank = rank;
+
+	char hostname[500];
+	snprintf(hostname,500,"%s %02d",processor_name,rank);
+
+	int data_fs = shm_open("/sts.data",O_CREAT | O_RDWR,S_IRUSR | S_IWUSR);
+
+	ftruncate(data_fs,buffer_length * (1 << 17));
+
+	char* buffer = (char*) mmap(NULL,buffer_length * (1 << 17),PROT_READ | PROT_WRITE,MAP_SHARED,data_fs,0);
+
+	if (buffer == (void*) -1) {
+		printf("[%s] mmap error: %d %s\n",hostname,errno,strerror(errno));
+		exit(1);
+	}
+
+	memcpy(buffer,data_buffer,buffer_length * (1 << 17));
+
+	close(data_fs);
+
+	static char prgm[] = "/rhome/jjroman/sts-master/sts";
+	static char opt1[] = "-m";
+	static char opt2[] = "i";
+	static char opt3[] = "-i";
+	char opt4[30];
+	snprintf(opt4,30,"%ld",buffer_length);
+	//printf("[%03d] buff_len: %ld\n",rank,buffer_length);
+	static char file[] = "/dev/shm/sts.data";
+
+	int arg_c = 6;
+
+	char** args = malloc(6 * sizeof(void*));
+
+	args[0] = prgm;
+	args[1] = opt1;
+	args[2] = opt2;
+	args[3] = opt3;
+	args[4] = opt4;
+	args[5] = file;
+
+	sts_main(arg_c,args);
+
+	// clean up our calling stuff
+	free(args);
+	munmap(buffer,buffer_length * (1<<17));
+	shm_unlink("/sts.data");
+	remove("/dev/shm/sts.data");
+
+	// now deal with the results
+	char filename[500];
+	char full_filepath[600];
+	snprintf(filename,500,"/sts.%04d.%s.1048576.pvalues",job_rank,opt4);
+	snprintf(full_filepath,600,"/dev/shm%s",filename);	
+
+	data_fs = shm_open(filename,O_RDWR,S_IRUSR | S_IWUSR);
+	uint64_t fsize = get_file_size(full_filepath);
+
+	*ret_buffer = (char*) mmap(NULL,fsize,PROT_READ | PROT_WRITE,MAP_SHARED,data_fs,0);
+
+	return fsize;
+
+}
+
+struct split_group {
+
+	MPI_Group norm_group;
+	MPI_Group plus_group;
+
+	MPI_Comm norm_comm;
+	MPI_Comm plus_comm;
+
+	int num_plus;
+	int num_norm;
+
+	uint64_t file_size;
+	uint64_t per_group;
+
+	bool am_plus1;
+
+};
+
+void clean_up(char* buffer, uint64_t size, struct split_group* sg) {
+	
+	munmap(buffer,size);
+		
+	int job_rank;
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &job_rank);
+
+	char filename[500];
+	char full_filepath[600];
+
+	char opt4[30];
+	snprintf(opt4,30,"%ld",sg->per_group + ((sg->am_plus1) ? 1 : 0));
+
+	snprintf(filename,500,"/sts.%04d.%s.1048576.pvalues",job_rank,opt4);
+	snprintf(full_filepath,600,"/dev/shm%s",filename);
+	
+	shm_unlink(filename);
+	remove(full_filepath);
+
+	
+}
+
+// split comm world into 2 groups for un-even data
+struct split_group* make_groups(uint64_t data_size) {
+	
+	struct split_group* sg = (struct split_group*) malloc(sizeof(struct split_group));
+	
+	int size, rank;
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+	sg->file_size = data_size;
+	
+	uint64_t num_runs = data_size / (1 << 17);
+
+	sg->per_group = num_runs / size;
+	sg->num_plus = num_runs % size;
+	if (rank == 0 && sg->num_plus) {
+		printf("Cutting off last %d bytes\n",sg->num_plus * (1 << 17));
+	}
+	sg->num_plus = 0;
+	sg->num_norm = size - sg->num_plus;
+	sg->am_plus1 = false;
+	
+	MPI_Group world_group;
+	
+	MPI_Comm_group(MPI_COMM_WORLD,&world_group);
+	
+	if (sg->num_plus) {
+		
+		int* groups = (int*) malloc(size * sizeof(int));
+		
+		for (int i = 0; i < sg->num_plus; i++) {
+			groups[i] = i;
+		}
+
+		MPI_Group_incl(world_group,sg->num_plus,groups,&sg->plus_group);
+
+		if (rank < sg->num_plus) {
+			sg->am_plus1 = true;
+		}
+
+		groups[0] = 0;
+
+		for (int i = 1; i < sg->num_norm + 1; i++) {
+			groups[i] = (i + sg->num_plus) - 1;
+		}
+	
+		MPI_Group_incl(world_group,sg->num_norm + 1,groups,&sg->norm_group);
+
+		MPI_Comm_create_group(MPI_COMM_WORLD, sg->norm_group, 0, &sg->norm_comm);
+		
+		MPI_Comm_create_group(MPI_COMM_WORLD, sg->plus_group, 0, &sg->plus_comm);
+	
+		free(groups);
+	}
+	
+	return sg;
+
+}
+
+char* get_data(struct split_group* sg, uint64_t* data_length, char* prov_data) {
+	
+	int size, rank, rank2, size2;
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	
+	char* data_buffer = nullptr;
+
+	if (rank == 0) {
+		data_buffer = prov_data;
+	}
+
+	char* ret_buffer;
+
+	// yay!! easy
+	if (sg->num_plus == 0) {
+		
+		ret_buffer = (char*) malloc(sg->per_group * (1 << 17));
+		*data_length = sg->per_group; 
+		MPI_Scatter(data_buffer,sg->per_group * (1 << 17),MPI_BYTE,ret_buffer,sg->per_group * (1 << 17),MPI_BYTE,0,MPI_COMM_WORLD);
+			
+	}
+	// no yay, not easy
+	else {
+		// how much data is in the normal part of it?
+		ret_buffer = (char*) calloc((sg->per_group + ((sg->am_plus1) ? 1 : 0)) * (1 << 17),1);
+
+		if (ret_buffer == nullptr) {
+			fprintf(stderr,"very bad\n");
+		}
+
+		// take it from the end (there is a reason for this)
+		if (rank == 0 || (!(sg->am_plus1))) {
+			MPI_Comm_size(sg->norm_comm, &size2);
+			MPI_Comm_rank(sg->norm_comm, &rank2);
+			fprintf(stderr,"not plus %d, %d, %d\n",rank,rank2,size2);
+			if (rank == 0) {
+				fprintf(stderr,"%ld\n",(sg->num_plus * sg->per_group * (1 << 17)) + 
+                                        sg->num_plus * ((sg->per_group + 1) - sg->per_group) * (1 << 17));
+			}
+			MPI_Scatter(data_buffer + 
+					(sg->num_plus * sg->per_group * (1 << 17)) + 
+					sg->num_plus * ((sg->per_group + 1) - sg->per_group) * (1 << 17),
+					sg->per_group * (1 << 17),
+					MPI_BYTE,
+					ret_buffer,
+					sg->per_group * (1 << 17),
+					MPI_BYTE,
+					0,
+					sg->norm_comm);
+			*data_length = sg->per_group * (1 << 17);
+			fprintf(stderr,"%d Are we good?\n",rank);
+		}
+	
+		printf("%d Before bar\n",rank);
+
+		MPI_Barrier(MPI_COMM_WORLD);
+
+		printf("%d After bar\n",rank);
+
+		// root will go through both because it has to
+		if (rank == 0 || sg->am_plus1) {
+			fprintf(stderr,"trying plus?\n");
+			MPI_Scatter(data_buffer,(sg->per_group + 1) * (1 << 17),MPI_BYTE,ret_buffer,(sg->per_group + 1) * (1 << 17),MPI_BYTE,0,sg->plus_comm);
+			*data_length = (sg->per_group + 1) * (1 << 17);
+			fprintf(stderr,"d-done?\n");
+
+
+		}
+
+	}
+
+	return ret_buffer;
+
+}
+
+// write this result to a file
+void write_res_to_file(char* buffer, uint64_t size, int rank, bool plus_one, struct split_group* sg) {
+
+	char filename[500], full_filepath[600];
+	
+	char opt4[30];
+	snprintf(opt4,30,"%ld",sg->per_group + ((sg->am_plus1) ? 1 : 0));
+
+	snprintf(filename,500,"/sts_tests/sts.%04d.%s.1048576.pvalues",rank,opt4);
+	snprintf(full_filepath,600,"/dev/shm%s",filename);
+	
+	int data_fs = shm_open(filename,O_CREAT | O_RDWR,S_IRUSR | S_IWUSR);
+	
+	if (data_fs == -1) {
+        	printf("Error opening file %s\n",filename);
+	        printf("Error: %s\n",strerror(errno));
+        	exit(1);
+	}
+
+	ftruncate(data_fs,size);
+
+	char* wbuffer = (char*) mmap(NULL,size,PROT_READ | PROT_WRITE,MAP_SHARED,data_fs,0);
+	
+	if (wbuffer == (char*) -1) {
+        	printf("Error opening file %s\n",filename);
+	        printf("Error: %s\n",strerror(errno));
+        	exit(1);
+	}
+
+	memcpy(wbuffer,buffer,size);
+	
+	close(data_fs);
+
+}
+
+void gather_results(char* buffer, uint64_t size, struct split_group* sg) {
+
+	int rank;
+	int mpi_size;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+
+	if (rank == 0) {
+	
+		system("rm -rf /dev/shm/sts_tests/");
+
+		int mkdirstat = mkdir("/dev/shm/sts_tests/",S_IRWXU);
+		
+		if (mkdirstat == -1) {
+        		printf("Error making dir\n");
+	        	printf("Error: %s\n",strerror(errno));
+	        	exit(1);
+		}
+
+		write_res_to_file(buffer,size,0,sg->am_plus1,sg);
+
+		char* rbuffer = (char*) malloc((sg->per_group + 1) * (1 << 17));
+		uint64_t rsize;
+		uint8_t plus_one;
+
+		MPI_Status status;
+
+		for (int i = 1; i < mpi_size; i++) {
+			MPI_Recv(&rsize,1,MPI_UINT64_T,i,0,MPI_COMM_WORLD,&status);
+			MPI_Recv(&plus_one,1,MPI_UINT8_T,i,0,MPI_COMM_WORLD,&status);
+			MPI_Recv(rbuffer,rsize,MPI_CHAR,i,0,MPI_COMM_WORLD,&status);
+			write_res_to_file(rbuffer,rsize,i,plus_one,sg);	
+		}
+
+		free(rbuffer);
+	} else {
+		MPI_Send(&size,1,MPI_UINT64_T,0,0,MPI_COMM_WORLD);
+		MPI_Send(&(sg->am_plus1),1,MPI_UINT8_T,0,0,MPI_COMM_WORLD);
+		MPI_Send(buffer,size,MPI_CHAR,0,0,MPI_COMM_WORLD);
+	}
+
+}
+
+void final_compute(char* outfile) {
+
+	char cmd[2048];
+
+	snprintf(cmd,2048,"mpi_sts -m a -d /dev/shm/sts_tests/ -w %s",outfile);
+
+	system(cmd);
+
+}
+
+char* get_data_from_network(uint64_t* length, char* fname) {
+
+	char* filename = fname;
+
+	uint64_t file_size = get_file_size(filename);
+
+	int randfd = open(filename,O_RDONLY);
+	
+	char* ret = (char*) mmap(NULL,file_size,PROT_READ,MAP_PRIVATE,randfd,0);
+
+	*length = file_size;
+	return ret;
+
+}
+
+int main(int argc, char** argv) {
+
+	if (argc > 2 && argv[1][1] == 'm') {
+		sts_main(argc,argv);
+		exit(0);	
+	}
+
+	MPI_Init(&argc,&argv);
+	
+	int size, rank;
+
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+	uint64_t data_length;
+
+	char* data = NULL;
+
+	if (rank == 0) {
+		data = get_data_from_network(&data_length,argv[1]);
+	}
+
+	MPI_Bcast(&data_length,1,MPI_UINT64_T,0,MPI_COMM_WORLD);	
+
+	if (rank == 0) {
+		printf("[%03d] Size: %ld\n",rank,data_length);
+	}
+	
+	struct split_group* sg = make_groups(data_length);
+	
+	uint64_t calc_data_length;
+	char* calc_data = get_data(sg,&calc_data_length,data);
+
+	char* ret_buffer;
+	uint64_t ret = call_sts(calc_data_length,calc_data,&ret_buffer);
+
+	// gather stuff
+	gather_results(ret_buffer,ret,sg);
+	
+	clean_up(ret_buffer,ret,sg);
+	
+	if (rank == 0) {
+		final_compute(argv[2]);
+	}
+
+	MPI_Finalize();
+
+	return 0;
+
+
 }

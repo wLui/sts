@@ -493,6 +493,8 @@ struct thread_state {
 	pthread_mutex_t *mutex;
 };
 
+#define nullptr NULL
+
 /* *INDENT-ON* */
 
 /*

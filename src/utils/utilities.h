@@ -51,4 +51,6 @@ extern int multiplication_will_overflow_long(long int si_a, long int si_b);
 extern void getTimestamp(char *buf, size_t len);
 extern void append_string_to_linked_list(struct Node **head, char* string);
 
+extern int job_rank;
+
 #endif				/* UTILITY_H */

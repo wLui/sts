@@ -1,0 +1,18 @@
+This is a modification of the NIST 800-22 STS that integrates it with MPI
+for HPC purposes.
+
+Author: Jeremy J Romanik Romano, R34 (zasderjjrr123)
+
+Original project:
+https://github.com/arcetri/sts
+
+Bug I fixed lol:
+https://github.com/arcetri/sts/issues/7
+
+Changes:
+
+Added a wrapper to the main function of sts to allow us to import data from any arbitrary memory block, specfically from MPI
+
+All operations are done in memory, using /dev/shm/, so no disk operations are required, except for the initial input read, and final results write
+
+Optimized so it should never use more than ~8 gb of RAM at a time on any machine.

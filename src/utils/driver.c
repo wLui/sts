@@ -243,6 +243,7 @@ init(struct state *state)
 		}
 	}
 
+
 	/*
 	 * Create the path if required
 	 */
@@ -339,12 +340,13 @@ init(struct state *state)
 			dbg(DBG_HIGH, "test %s[%d] is still enabled", state->testNames[i], i);
 		}
 	}
+
 	if (test_count <= 0) {
 		err(50, __func__, "no more tests enabled, nothing to do, aborting");
 	} else {
 		dbg(DBG_MED, "We have %d tests enabled and initialized", test_count);
 	}
-
+	
 	/*
 	 * Check that n is big enough
 	 */
