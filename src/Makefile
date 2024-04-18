@@ -97,7 +97,7 @@ LEGACY_ONLY_OBJ= utils/dyn_alloc_legacy.o \
       utils/parse_args_legacy.o utils/debug_legacy.o utils/driver_legacy.o
 
 MODERN_ONLY_OBJ= utils/dyn_alloc.o \
-      sts.o tests/frequency.o tests/blockFrequency.o \
+      mpi_sts.o sts.o tests/frequency.o tests/blockFrequency.o \
       tests/cusum.o tests/runs.o tests/longestRunOfOnes.o \
       tests/serial.o tests/rank.o tests/discreteFourierTransform.o \
       tests/nonOverlappingTemplateMatchings.o \
@@ -111,6 +111,8 @@ MODERN_ONLY_OBJ= utils/dyn_alloc.o \
 OBJ_LEGACY= ${LEGACY_ONLY_OBJ}
 
 OBJ= ${MODERN_ONLY_OBJ}
+STS_OBJ= ${filter-out mpi_sts.o,${OBJ}}
+MPI_OBJ= ${filter-out sts.o,${OBJ}}
 
 # Code that is mentioned in source comments that is not strictly part of the
 # sts code base.  And while only mkapertemplate has a rule to compile itself
@@ -124,7 +126,7 @@ TOOLS_SRC= ../tools/mkapertemplate.c ../tools/pi_term.nb ../tools/pi_term.txt \
 
 LEGACY_TARGETS= sts_legacy_fft ../sts_legacy_fft
 
-TARGETS= mpi_sts ../mpi_sts
+TARGETS= mpi_sts ../mpi_sts sts ../sts
 
 # default rule
 #
@@ -144,14 +146,22 @@ debug_make:
 
 legacy: ${LEGACY_TARGETS}
 
-mpi_sts: ${OBJ}
+mpi_sts: ${MPI_OBJ}
 	${RM} -f $@
-	# mpicc -Wall -Werror -pedantic ${CFLAGS} ${OBJ} ${LIBS} -o $@ -lrt
-	mpicc -Wall -pedantic ${CFLAGS} ${OBJ} ${LIBS} -o $@ -lrt -fPIE
+	# mpicc -Wall -Werror -pedantic ${CFLAGS} ${MPI_OBJ} ${LIBS} -o $@ -lrt
+	mpicc -Wall -pedantic ${CFLAGS} ${MPI_OBJ} ${LIBS} -o $@ -lrt -fPIE
+
+sts: ${STS_OBJ}
+	${RM} -f $@
+	${CC} ${CFLAGS} ${STS_OBJ} ${LIBS} -o $@
 
 sts_legacy_fft: ${OBJ_LEGACY}
 	${RM} -f $@
 	${CC} ${CFLAGS} ${OBJ_LEGACY} ${LEGACY_LIBS} -o $@
+
+../sts: sts
+	${RM} -f $@
+	${CP} -f -p sts $@
 
 ../mpi_sts: mpi_sts
 	${RM} -f $@
@@ -163,9 +173,12 @@ sts_legacy_fft: ${OBJ_LEGACY}
 
 # object dependencies and rules
 #
-sts.o: sts.c
+mpi_sts.o: mpi_sts.c
 	# mpicc -D_XOPEN_SOURCE=500 -Wall -Werror -pedantic -c -o $@ ${CFLAGS} sts.c
-	mpicc -D_XOPEN_SOURCE=500 -Wall -pedantic -c -o $@ ${CFLAGS} sts.c
+	mpicc -D_XOPEN_SOURCE=500 -Wall -pedantic -c -o $@ ${CFLAGS} mpi_sts.c
+
+sts.o: sts.c
+	$(CC) -c -o $@ ${CFLAGS} sts.c
 
 sts_legacy.o: sts.c
 	${CC} -c -o $@ ${CFLAGS} -DLEGACY_FFT sts.c
@@ -450,6 +463,9 @@ install: all
 sts.o: utils/defs.h utils/config.h utils/dyn_alloc.h
 sts.o: utils/utilities.h utils/externs.h
 sts.o: utils/defs.h utils/debug.h
+mpi_sts.o: utils/defs.h utils/config.h utils/dyn_alloc.h
+mpi_sts.o: utils/utilities.h utils/externs.h
+mpi_sts.o: utils/defs.h utils/debug.h
 tests/frequency.o: utils/externs.h utils/defs.h utils/utilities.h
 tests/frequency.o: utils/debug.h utils/cephes.h
 tests/blockFrequency.o: utils/externs.h utils/defs.h utils/cephes.h
