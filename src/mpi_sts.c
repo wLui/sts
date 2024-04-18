@@ -314,6 +314,9 @@
 #include "utils/externs.h"
 #include "utils/debug.h"
 
+// STS executable location
+#define STS_EXE "./sts"
+#define MPI_STS_EXE "./mpi_sts"
 
 // STS version
 const char *const version = "3.2.6";
@@ -334,8 +337,8 @@ sts_main(int argc, char *argv[])
 	/*
 	 * Set default test parameters and parse command line
 	 */
-
 	parse_args(&run_state, argc, argv);
+
 	/*
 	 * Initialize all active tests
 	 */
@@ -415,7 +418,6 @@ uint64_t get_file_size(char* fname) {
 
 	// try to open the given file
 	int randfd = open(fname,O_RDONLY);
-
 	if (randfd == -1) {
         	printf("Error opening file %s\n",fname);
 	        printf("Error: %s\n",strerror(errno));
@@ -439,9 +441,7 @@ uint64_t get_file_size(char* fname) {
 
 uint64_t call_sts(uint64_t buffer_length,char* data_buffer, char** ret_buffer) {
 
-	// NOTE:
-	// buffer length is number of million bit runs, so multiply it by (1 << 17) to get the number of bytes
-	
+	// NOTE: buffer length is number of million bit runs, so multiply it by (1 << 17) to get the number of bytes
 	int size,rank;
 	int name_len;
 	char processor_name[MPI_MAX_PROCESSOR_NAME];
@@ -453,23 +453,17 @@ uint64_t call_sts(uint64_t buffer_length,char* data_buffer, char** ret_buffer) {
 
 	char hostname[500];
 	snprintf(hostname,500,"%s %02d",processor_name,rank);
-
-	int data_fs = shm_open("/sts.data",O_CREAT | O_RDWR,S_IRUSR | S_IWUSR);
-
+	int data_fs = shm_open("sts.data", O_CREAT | O_RDWR,S_IRUSR | S_IWUSR);
 	ftruncate(data_fs,buffer_length * (1 << 17));
-
 	char* buffer = (char*) mmap(NULL,buffer_length * (1 << 17),PROT_READ | PROT_WRITE,MAP_SHARED,data_fs,0);
-
 	if (buffer == (void*) -1) {
 		printf("[%s] mmap error: %d %s\n",hostname,errno,strerror(errno));
 		exit(1);
 	}
 
 	memcpy(buffer,data_buffer,buffer_length * (1 << 17));
-
 	close(data_fs);
 
-	static char prgm[] = "/rhome/jjroman/sts-master/sts";
 	static char opt1[] = "-m";
 	static char opt2[] = "i";
 	static char opt3[] = "-i";
@@ -479,37 +473,32 @@ uint64_t call_sts(uint64_t buffer_length,char* data_buffer, char** ret_buffer) {
 	static char file[] = "/dev/shm/sts.data";
 
 	int arg_c = 6;
-
 	char** args = malloc(6 * sizeof(void*));
-
-	args[0] = prgm;
+	args[0] = STS_EXE;
 	args[1] = opt1;
 	args[2] = opt2;
 	args[3] = opt3;
 	args[4] = opt4;
 	args[5] = file;
 
-	sts_main(arg_c,args);
-
+	sts_main(arg_c, args);
 	// clean up our calling stuff
 	free(args);
 	munmap(buffer,buffer_length * (1<<17));
-	shm_unlink("/sts.data");
+	shm_unlink("sts.data");
 	remove("/dev/shm/sts.data");
 
 	// now deal with the results
 	char filename[500];
 	char full_filepath[600];
-	snprintf(filename,500,"/sts.%04d.%s.1048576.pvalues",job_rank,opt4);
-	snprintf(full_filepath,600,"/dev/shm%s",filename);	
+	snprintf(filename,500,"sts.%04d.%s.1048576.pvalues", job_rank, opt4);
+	snprintf(full_filepath,600,"/dev/shm/%s",filename);	
 
 	data_fs = shm_open(filename,O_RDWR,S_IRUSR | S_IWUSR);
 	uint64_t fsize = get_file_size(full_filepath);
 
 	*ret_buffer = (char*) mmap(NULL,fsize,PROT_READ | PROT_WRITE,MAP_SHARED,data_fs,0);
-
 	return fsize;
-
 }
 
 struct split_group {
@@ -544,7 +533,7 @@ void clean_up(char* buffer, uint64_t size, struct split_group* sg) {
 	char opt4[30];
 	snprintf(opt4,30,"%ld",sg->per_group + ((sg->am_plus1) ? 1 : 0));
 
-	snprintf(filename,500,"/sts.%04d.%s.1048576.pvalues",job_rank,opt4);
+	snprintf(filename,500,"sts.%04d.%s.1048576.pvalues", job_rank, opt4);
 	snprintf(full_filepath,600,"/dev/shm%s",filename);
 	
 	shm_unlink(filename);
@@ -698,11 +687,9 @@ void write_res_to_file(char* buffer, uint64_t size, int rank, bool plus_one, str
 	char opt4[30];
 	snprintf(opt4,30,"%ld",sg->per_group + ((sg->am_plus1) ? 1 : 0));
 
-	snprintf(filename,500,"/sts_tests/sts.%04d.%s.1048576.pvalues",rank,opt4);
-	snprintf(full_filepath,600,"/dev/shm%s",filename);
-	
+	snprintf(filename, 500, "sts.%04d.%s.1048576.pvalues", rank, opt4);
+	snprintf(full_filepath,600,"/dev/shm/%s", filename);
 	int data_fs = shm_open(filename,O_CREAT | O_RDWR,S_IRUSR | S_IWUSR);
-	
 	if (data_fs == -1) {
         	printf("Error opening file %s\n",filename);
 	        printf("Error: %s\n",strerror(errno));
@@ -733,25 +720,27 @@ void gather_results(char* buffer, uint64_t size, struct split_group* sg) {
 	MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
 	if (rank == 0) {
-	
-		system("rm -rf /dev/shm/sts_tests/");
+        struct stat st = {0};
+        if(stat("/dev/shm/", &st) == -1) {
+            printf("Could not stat /dev/shm/, error: %s\n", strerror(errno));
+            exit(1);
+        }
 
-		int mkdirstat = mkdir("/dev/shm/sts_tests/",S_IRWXU);
-		
-		if (mkdirstat == -1) {
-        		printf("Error making dir\n");
-	        	printf("Error: %s\n",strerror(errno));
-	        	exit(1);
-		}
+        if(S_ISDIR(st.st_mode)) { // clear it if it's n existing directory
+            system("rm -rf /dev/shm/*");
+        } else {
+            system("rm -rf /dev/shm"); // some sort of file, which it should not be
+            if (mkdir("/dev/shm/", S_IRWXU) == -1) {
+                printf("Error making /dev/shm/, %s\n", strerror(errno));
+                exit(1);
+            }
+        }
 
 		write_res_to_file(buffer,size,0,sg->am_plus1,sg);
-
 		char* rbuffer = (char*) malloc((sg->per_group + 1) * (1 << 17));
 		uint64_t rsize;
 		uint8_t plus_one;
-
 		MPI_Status status;
-
 		for (int i = 1; i < mpi_size; i++) {
 			MPI_Recv(&rsize,1,MPI_UINT64_T,i,0,MPI_COMM_WORLD,&status);
 			MPI_Recv(&plus_one,1,MPI_UINT8_T,i,0,MPI_COMM_WORLD,&status);
@@ -769,78 +758,92 @@ void gather_results(char* buffer, uint64_t size, struct split_group* sg) {
 }
 
 void final_compute(char* outfile) {
-
 	char cmd[2048];
-
-	snprintf(cmd,2048,"mpi_sts -m a -d /dev/shm/sts_tests/ -w %s",outfile);
-
+	snprintf(cmd,2048,"%s -m a -d /dev/shm/ -w %s", MPI_STS_EXE, outfile);
 	system(cmd);
-
 }
 
 char* get_data_from_network(uint64_t* length, char* fname) {
-
 	char* filename = fname;
-
 	uint64_t file_size = get_file_size(filename);
-
 	int randfd = open(filename,O_RDONLY);
-	
 	char* ret = (char*) mmap(NULL,file_size,PROT_READ,MAP_PRIVATE,randfd,0);
 
 	*length = file_size;
 	return ret;
+}
 
+// Truthy if installed correctedly, falsy otherwise
+int is_installed() {
+    struct stat st = {0};
+    if(stat(STS_EXE, &st)) {
+        return 0;
+    }
+
+    // there ought to exist a way to check that the exe has the correct header or ensure that the exe
+    // will have a particular header but just check that it exists + is exe
+    // separate out the checks in case further logging is required
+    if(!S_ISREG(st.st_mode)) {
+        return 0;
+    }
+    if(!(S_IXUSR & st.st_mode)) {
+        return 0;
+    }
+
+    return 1;
 }
 
 int main(int argc, char** argv) {
-
 	if (argc > 2 && argv[1][1] == 'm') {
-		sts_main(argc,argv);
+        printf("Running normal sts with the arguments: %s", argv[0]);
+        for(int i = 1; i < argc; i++) {
+            printf(" %s", argv[i]);
+        }
+        printf("\n");
+        // end of debug
+		sts_main(argc, argv);
 		exit(0);	
 	}
 
-	MPI_Init(&argc,&argv);
-	
-	int size, rank;
+    if (argc == 1) {
+        printf("Usage: ./mpi_sts <filename> <outfile>\n");
+        exit(1);
+    }
+    
+    if (!is_installed()) {
+        printf("Expected sts and mpi_sts to be installed at %s\n", STS_EXE, MPI_STS_EXE);
+        exit(1);
+    }
 
+	MPI_Init(&argc,&argv);
+	int size, rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
 	uint64_t data_length;
-
 	char* data = NULL;
-
 	if (rank == 0) {
-		data = get_data_from_network(&data_length,argv[1]);
+		data = get_data_from_network(&data_length, argv[1]);
 	}
 
 	MPI_Bcast(&data_length,1,MPI_UINT64_T,0,MPI_COMM_WORLD);	
-
 	if (rank == 0) {
 		printf("[%03d] Size: %ld\n",rank,data_length);
 	}
 	
 	struct split_group* sg = make_groups(data_length);
-	
 	uint64_t calc_data_length;
 	char* calc_data = get_data(sg,&calc_data_length,data);
-
 	char* ret_buffer;
 	uint64_t ret = call_sts(calc_data_length,calc_data,&ret_buffer);
 
 	// gather stuff
 	gather_results(ret_buffer,ret,sg);
-	
 	clean_up(ret_buffer,ret,sg);
-	
 	if (rank == 0) {
 		final_compute(argv[2]);
 	}
 
 	MPI_Finalize();
-
 	return 0;
-
-
 }

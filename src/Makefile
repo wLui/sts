@@ -325,6 +325,8 @@ mkapertemplate: ../tools/mkapertemplate.c utils/debug.o
 #
 clean:
 	${RM} -f ${OBJ} ${LEGACY_ONLY_OBJ}
+	${RM} -f sts
+	${RM} -f mpi_sts
 
 clobber: clean
 	@for i in ${TARGETS} ${LEGACY_TARGETS} tags Makefile.bak mkapertemplate; do \
